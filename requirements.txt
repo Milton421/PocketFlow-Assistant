@@ -1,0 +1,13 @@
+faiss-cpu
+numpy
+openai
+tiktoken
+fastapi
+uvicorn
+streamlit
+python-docx
+PyPDF2
+pocketflow
+python-dotenv
+pymupdf
+pdfplumber
