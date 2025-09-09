@@ -86,13 +86,6 @@ Clona el repositorio:
 git clone https://github.com/tu_usuario/pocketflow-assistant.git
 cd pocketflow-assistant
 ```
-🛠️ Instalación y Configuración
-Clonar el repositorio
-
-```bash
-git clone https://github.com/Milton421/PocketFlow-Assistant.git
-cd pocket_rag
-```
 Crear entorno virtual
 
 ```bash
@@ -124,5 +117,6 @@ uvicorn api:app --reload
 # Interfaz
 streamlit run ui.py
 ```
+
 
 
