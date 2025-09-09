@@ -111,12 +111,12 @@ EMBEDDING_MODEL=text-embedding-3-small
 Iniciar el sistema
 
 ```bash
-Copy code
 # Backend
 uvicorn api:app --reload
 # Interfaz
 streamlit run ui.py
 ```
+
 
 
 
