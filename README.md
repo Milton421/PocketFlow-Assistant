@@ -118,5 +118,35 @@ streamlit run ui.py
 ```
 
 
+## ⚙️ 10. Diseño Técnico
+
+### 🔄 Flujo de Datos
+1. **Procesamiento de Documentos** → Generación de **Embeddings** → Almacenamiento en **FAISS**  
+2. **Consulta del Usuario** → Conversión a **Embedding** → **Recuperación** de fragmentos → Generación de **Respuesta**
+
+### 🎛️ Personalización
+- Modelo de *embeddings* configurable  
+- Tamaño de fragmentos (*chunk size*) ajustable  
+- Umbral de relevancia modificable  
+```mermaid
+flowchart LR
+    %% ===== FLUJO DE DATOS =====
+    subgraph Indexación[Procesamiento de Documentos]
+        A[Documentos] --> B[Generar Embeddings]
+        B --> C[Almacenar en FAISS]
+    end
+
+    subgraph Consulta[Consulta del Usuario]
+        D[Pregunta del Usuario] --> E[Generar Embedding de Consulta]
+        E --> F[Buscar en FAISS]
+        F --> G[Recuperar Fragmentos Relevantes]
+        G --> H[Generar Respuesta con LLM]
+    end
+
+    %% CONEXIÓN ENTRE FLUJOS
+    C --> F
+```
+ 
+
 
 
