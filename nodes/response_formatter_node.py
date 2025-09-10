@@ -27,6 +27,8 @@ class ResponseFormatter:
         
         if formatting_strategy == "hierarchical":
             result = self._format_hierarchical(answer, is_unified_request)
+        elif formatting_strategy == "risks_benefits":
+            result = self._format_risks_benefits(answer, is_unified_request)
         elif formatting_strategy == "simple_list":
             result = self._format_simple_list(answer) if is_unified_request else self._format_narrative(answer)
         elif formatting_strategy == "mixed_content":
@@ -44,9 +46,15 @@ class ResponseFormatter:
         # Remover prefijos redundantes
         text = re.sub(r"^\s*(respuesta|la respuesta)\s*:\s*", "", text, flags=re.I)
         
-        # Normalizar espacios y saltos de línea
-        text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'\n\s*\n+', '\n', text)
+        # Normalizar espacios, pero PRESERVAR saltos de línea para no destruir listas/párrafos
+        text = re.sub(r'[ \t]+', ' ', text)      # solo espacios y tabs
+        text = re.sub(r'\n\s*\n+', '\n\n', text) # comprimir múltiples líneas en doble salto
+
+        # Corregir errores de puntuación tipo "Riesgos:."
+        text = re.sub(r':\s*\.', ':', text)
+
+        # Eliminar líneas que solo contienen asteriscos (artefactos de OCR/parseo como "**.")
+        text = re.sub(r'(?m)^\s*\*{1,3}\s*[.,;:!?]?\s*$', '', text)
         
         # Separar texto pegado común
         text = re.sub(r'([a-záéíóúñ])([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)', r'\1. \2', text)
@@ -57,6 +65,10 @@ class ResponseFormatter:
     def _determine_formatting_strategy(self, text: str, force_bullets: bool) -> str:
         """Determina qué estrategia de formateo usar"""
         
+        # Caso especial: secciones de "Riesgos" y "Beneficios"
+        if re.search(r'\briesgos?\b\s*:', text, re.IGNORECASE) and re.search(r'\bbeneficios?\b\s*:', text, re.IGNORECASE):
+            return "risks_benefits"
+        
         # 1. Detectar contenido jerárquico (categorías con subcategorías)
         hierarchical_patterns = [
             r'para el profesor\s*[-:]',
@@ -66,30 +78,30 @@ class ResponseFormatter:
             r'(?:tipos de|clases de|categorías de)'
         ]
         
-        hierarchical_count = sum(1 for pattern in hierarchical_patterns 
+        hierarchical_count = sum(1 for pattern in hierarchical_patterns
                                 if re.search(pattern, text, re.IGNORECASE))
         
         if hierarchical_count >= 2:
             return "hierarchical"
         
-        # 2. Detectar listas simples
+        # 2. Detectar listas simples (más restrictivo: requiere marcadores claros)
         list_indicators = [
-            r'\b(?:incluye|incluyen|son|menciona|mencionan)\b.*:',
+            r'\b(?:incluye|incluyen|son|menciona|mencionan|contiene|contienen|enumera|enumeran|presenta|presentan)\b\s*:?',  # verbo+:
             r'^\s*[-•·*]\s+',  # Ya tiene viñetas
             r'^\s*\d+[.)]\s+',  # Ya numerada
-            r'\b(?:elementos|recursos|tipos|aspectos|características)\b'
         ]
         
-        list_count = sum(1 for pattern in list_indicators 
+        list_count = sum(1 for pattern in list_indicators
                         if re.search(pattern, text, re.IGNORECASE | re.MULTILINE))
         comma_count = text.count(',')
         
-        if force_bullets or list_count >= 1 or comma_count >= 4:
+        # Solo considerar lista simple si hay fuerza explícita o marcadores claros.
+        if force_bullets or list_count >= 1:
             return "simple_list"
         
-        # 3. Detectar contenido mixto (párrafos + listas)
-        has_long_sentences = any(len(sent.strip()) > 80 for sent in text.split('.'))
-        has_short_items = comma_count >= 2
+        # 3. Detectar contenido mixto (párrafos + enumeraciones por comas)
+        has_long_sentences = any(len(sent.strip()) > 80 for sent in re.split(r'(?<=[.!?])\s+', text))
+        has_short_items = comma_count >= 4
         
         if has_long_sentences and has_short_items:
             return "mixed_content"
@@ -219,8 +231,127 @@ class ResponseFormatter:
             for title, items in found_sections:
                 output.append(f"**{title}:** {', '.join(items)}")
         return "\n".join(output)
-
         
+         
+    def _format_risks_benefits(self, text: str, is_unified_request: bool = True) -> str:
+        """Formatea respuestas con secciones 'Riesgos:' y 'Beneficios:', limpia '**' sueltos y separa conclusiones."""
+        # Intro previa a la primera sección
+        first_sec = re.search(r'(?i)(riesgos?|beneficios?)\s*:', text)
+        intro = text[:first_sec.start()].strip() if first_sec else ""
+        intro = self._remove_stray_asterisks(intro)
+    
+        # Extraer bloques
+        risks_match = re.search(r'(?is)riesgos?\s*:(.*?)(?=beneficios?\s*:|$)', text, re.IGNORECASE | re.DOTALL)
+        ben_match = re.search(r'(?is)beneficios?\s*:(.*)$', text, re.IGNORECASE | re.DOTALL)
+    
+        def split_items(section_text: str) -> list:
+            if not section_text:
+                return []
+            s = section_text.strip()
+    
+            # Si ya viene en viñetas por líneas
+            bullets = []
+            for line in s.splitlines():
+                line = line.strip()
+                if re.match(r'^[-•·*]\s+', line):
+                    bullets.append(re.sub(r'^[-•·*]\s+', '', line).strip())
+            if bullets:
+                candidates = bullets
+            else:
+                # Dividir por oraciones o por ';'
+                candidates = []
+                parts = re.split(r'(?<=[.!?])\s+|;\s+', s)
+                for part in parts:
+                    part = part.strip(" •-*")
+                    if not part:
+                        continue
+                    # Quitar encabezados repetidos
+                    part = re.sub(r'^(?:[Rr]iesgos?:|[Bb]eneficios?:)\s*', '', part).strip()
+                    # Limpiar asteriscos residuales (p. ej., 'palabra**:' -> 'palabra:')
+                    part = re.sub(r'\*{1,3}([.,;:!?])', r'\1', part)
+                    part = re.sub(r'^\*{1,3}', '', part)
+                    part = re.sub(r'\*{1,3}$', '', part)
+                    part = self._remove_stray_asterisks(part)
+                    # Normalizar final
+                    part = self._remove_trailing_connectors(part)
+                    if part and not part.endswith(('.', '!', '?')):
+                        part += '.'
+                    # Evitar basura muy corta
+                    if len(part) >= 4:
+                        candidates.append(part)
+    
+            # Limpieza final (sin duplicados triviales)
+            out = []
+            seen = set()
+            for c in candidates:
+                c2 = re.sub(r'\s+', ' ', c).strip()
+                if c2 and c2.lower() not in seen:
+                    out.append(c2)
+                    seen.add(c2.lower())
+            return out
+    
+        risks = split_items(risks_match.group(1) if risks_match else "")
+        benefits = split_items(ben_match.group(1) if ben_match else "")
+    
+        # Extraer posibles conclusiones que se colaron como viñetas
+        def extract_conclusion(items: list) -> tuple[list, str]:
+            conclusion_markers = (
+                r'en conclusi[óo]n',
+                r'en resumen',
+                r'en s[ií]ntesis',
+                r'en definitiva',
+                r'para finalizar',
+                r'finalmente',
+                r'por [úu]ltimo',
+                r'en suma',
+                r'a modo de conclusi[óo]n',
+            )
+            if not items:
+                return items, ""
+            remain, concls = [], []
+            for it in items:
+                if re.match(rf'(?i)^\s*(?:{"|".join(conclusion_markers)})\b', it.strip()):
+                    concls.append(it.rstrip())
+                else:
+                    remain.append(it)
+            paragraph = " ".join(concls).strip()
+            if paragraph and not paragraph.endswith(('.', '!', '?')):
+                paragraph += '.'
+            return remain, paragraph
+    
+        risks, concl_r = extract_conclusion(risks)
+        benefits, concl_b = extract_conclusion(benefits)
+        conclusion = " ".join([p for p in [concl_r, concl_b] if p]).strip()
+    
+        parts = []
+        if intro:
+            intro = intro.strip()
+            if not intro.endswith(('.', '!', '?')):
+                intro += '.'
+            parts.append(intro)
+    
+        if is_unified_request:
+            if risks:
+                parts.append("**Riesgos:**")
+                parts.extend([f"• {it}" for it in risks])
+            if benefits:
+                if risks:
+                    parts.append("")  # separador
+                parts.append("**Beneficios:**")
+                parts.extend([f"• {it}" for it in benefits])
+            if conclusion:
+                parts.append("")  # separador
+                parts.append(conclusion)
+            return "\n\n".join([p for p in parts if p != ""])
+        else:
+            if risks:
+                parts.append("**Riesgos:** " + " ".join(risks))
+            if benefits:
+                parts.append("**Beneficios:** " + " ".join(benefits))
+            if conclusion:
+                parts.append(conclusion)
+            return "\n\n".join(parts)
+         
     def _extract_items_for_section(self, content: str) -> list:
         """Extrae items específicamente para secciones jerárquicas"""
         if not content:
@@ -268,7 +399,7 @@ class ResponseFormatter:
         return items
 
     def _format_simple_list(self, text: str) -> str:
-        """Formatea como lista simple con viñetas"""
+        """Formatea como lista simple con viñetas y corta en cuanto empiece texto narrativo"""
         print("[FORMATTER] Applying simple list formatting")
         
         # Verificar si es una lista de recursos de profesor/alumnos
@@ -278,18 +409,29 @@ class ResponseFormatter:
         # Separar introducción de lista
         intro, list_part = self._separate_intro_and_list(text)
         
-        # Formatear lista
+        # Extraer ítems candidatos a viñetas
         items = self._extract_items(list_part)
+        
+        # Particionar: viñetas vs. cola narrativa
+        bullets, tail = self._split_bullets_and_tail(items)
         
         result_parts = []
         if intro:
+            # Asegurar buen cierre de la introducción si viene sin puntuación
+            if not intro.endswith(('.', '!', '?', ':')):
+                intro += ':'
             result_parts.append(intro)
         
-        if items:
-            formatted_items = [f"• {item}" for item in items]
+        if bullets:
+            formatted_items = [f"• {item}" for item in bullets]
             result_parts.extend(formatted_items)
         
-        return '\n\n'.join(result_parts) if intro else '\n'.join(result_parts)
+        # Si detectamos cola narrativa tras la lista, formatearla como párrafos
+        if tail:
+            narrative = self._format_narrative("\n".join(tail))
+            result_parts.append(narrative)
+        
+        return '\n\n'.join(result_parts)
 
     def _format_mixed_content(self, text: str) -> str:
         """Formatea con una intro narrativa corta + lista de ideas principales"""
@@ -334,41 +476,83 @@ class ResponseFormatter:
 
 
     def _format_narrative(self, text: str) -> str:
-        """Formatea como texto narrativo simple"""
+        """Formatea como texto narrativo, evitando listas y uniendo fragmentos sueltos"""
         print("[FORMATTER] Applying narrative formatting")
-        
-        # Normalizar párrafos
-        paragraphs = text.split('\n')
+
+        # 1) Quitar posibles marcadores de lista al inicio de líneas
+        text = re.sub(r'(?m)^\s*[-•·*]\s+', '', text)
+
+        # 2) Preservar dobles saltos como separadores de párrafos
+        #    y trabajar párrafo por párrafo para unir fragmentos internos
+        raw_paragraphs = [p.strip() for p in re.split(r'\n\s*\n', text) if p.strip()]
         cleaned_paragraphs = []
-        
-        for para in paragraphs:
-            para = para.strip()
-            if para:
-                # Asegurar que termine con punto si es necesario
-                if not para.endswith(('.', '!', '?', ':')):
-                    para += '.'
-                cleaned_paragraphs.append(para)
-        
+
+        connector_starts = (
+            "que ", "lo que ", "sino ", "sin embargo ", "no obstante ", "funcionando ",
+            "contrat", "así ", "de este modo ", "por lo tanto ", "por consiguiente ",
+            "además ", "también ", "donde ", "cuando ", "mientras ", "aunque ",
+        )
+
+        for para in raw_paragraphs:
+            # 2.a) Dividir en oraciones y fragmentos preservando separadores
+            #     Cortamos por signos de cierre, pero mantenemos los caracteres finales.
+            parts = re.split(r'(?<=[.!?])\s+|\n+', para)
+            parts = [p.strip() for p in parts if p and p.strip()]
+
+            merged = []
+            for part in parts:
+                lower = part.lower()
+
+                # Unir con la oración previa si parece un conector o es demasiado corta
+                if merged:
+                    too_short = len(part.split()) <= 4
+                    starts_with_connector = any(lower.startswith(c) for c in connector_starts)
+                    # Si la parte anterior termina con dos puntos, seguir la misma oración
+                    prev = merged[-1]
+                    prev_ends_colon = prev.endswith(':')
+
+                    if too_short or starts_with_connector or prev_ends_colon:
+                        # Unir con espacio
+                        merged[-1] = (prev.rstrip(' ')+ ' ' + part).strip()
+                        continue
+
+                merged.append(part)
+
+            # 2.b) Asegurar puntuación final adecuada en cada oración del párrafo
+            fixed_sentences = []
+            for sent in merged:
+                s = sent.strip()
+                if not s:
+                    continue
+                if not s.endswith(('.', '!', '?')):
+                    s += '.'
+                fixed_sentences.append(s)
+
+            # 2.c) Reunir párrafo final
+            if fixed_sentences:
+                cleaned_paragraphs.append(' '.join(fixed_sentences))
+
         return '\n\n'.join(cleaned_paragraphs)
 
     def _separate_intro_and_list(self, text: str) -> tuple:
-        """Separa introducción de lista"""
-        # Buscar patrones que indican inicio de lista
-        list_indicators = [
-            r'(:)\s*',
-            r'(incluye[n]?)\s*',
-            r'(son)\s*',
-            r'(menciona[n]?)\s*'
+        """Separa introducción de lista. Evita cortar por ':' genérico en texto narrativo."""
+        # Patrones verbales que típicamente introducen una lista y requieren ':'
+        list_introducers = [
+            r'(?:incluye|incluyen)\s*:',
+            r'(?:son)\s*:',
+            r'(?:menciona|mencionan)\s*:',
+            r'(?:enumera|enumeran)\s*:',
+            r'(?:contiene|contienen)\s*:',
+            r'(?:presenta|presentan)\s*:',
         ]
-        
-        for pattern in list_indicators:
+        for pattern in list_introducers:
             match = re.search(pattern, text, re.IGNORECASE)
             if match:
                 split_point = match.end()
                 intro = text[:split_point].strip()
                 list_part = text[split_point:].strip()
                 return intro, list_part
-        
+        # Si no hay intro clara de lista, devolver todo como narrativo
         return "", text
 
     def _extract_items(self, content: str) -> list:
@@ -462,6 +646,33 @@ class ResponseFormatter:
         
         return cleaned_items
 
+    def _split_bullets_and_tail(self, items: list) -> tuple:
+        """Divide ítems en:
+        - bullets: elementos cortos/nominales apropiados para viñetas
+        - tail: oraciones largas que deben mostrarse como párrafos (cola narrativa)
+        Heurísticas:
+        - Inicia cola si un ítem tiene >= 14 palabras
+        - O si empieza con marcadores discursivos típicos de cierre/desarrollo
+        """
+        bullets = []
+        tail = []
+        started_tail = False
+        tail_markers = (
+            "En esencia", "En resumen", "En conclusión", "Finalmente", "Por último",
+            "El viaje", "Un progreso", "Una búsqueda", "Este viaje", "Puede ser", "Se presenta"
+        )
+
+        for item in items:
+            text = item.strip()
+            wc = len(text.split())
+            is_marker = any(text.startswith(m) for m in tail_markers)
+            if started_tail or wc >= 14 or is_marker:
+                started_tail = True
+                tail.append(text)
+            else:
+                bullets.append(text)
+        return bullets, tail
+
     
     def _remove_trailing_connectors(self, text: str) -> str:
         """Elimina conectores residuales como 'además', 'por último', etc."""
@@ -476,6 +687,52 @@ class ResponseFormatter:
         for pat in trailing_patterns:
             text = re.sub(pat, '', text, flags=re.IGNORECASE)
         return text.strip(" .,:;")
+    def _remove_stray_asterisks(self, text: str) -> str:
+        """Elimina asteriscos sueltos/artefactos sin romper encabezados en negrita que sí queremos mantener.
+        Preserva específicamente: **Riesgos:**, **Beneficios:**, **Para el profesor:**, **Para los alumnos:**"""
+        if not text:
+            return text
+
+        # 1) Proteger encabezados válidos reemplazando temporalmente los ** por marcadores
+        protect_map = {
+            r"\*\*\s*Riesgos\s*:\s*\*\*": "§§BOLD_RIESGOS§§",
+            r"\*\*\s*Beneficios\s*:\s*\*\*": "§§BOLD_BENEFICIOS§§",
+            r"\*\*\s*Para el profesor\s*:\s*\*\*": "§§BOLD_PROF§§",
+            r"\*\*\s*Para los alumnos\s*:\s*\*\*": "§§BOLD_ALUM§§",
+        }
+        for pat, token in protect_map.items():
+            text = re.sub(pat, token, text, flags=re.IGNORECASE)
+
+        # 2) Eliminar líneas compuestas solo por asteriscos (y posible .,:;!?)
+        text = re.sub(r'(?m)^\s*\*{1,3}\s*[.,;:!?]?\s*$', '', text)
+
+        # 3) Quitar asteriscos pegados a signos de puntuación: "palabra**:" -> "palabra:"
+        text = re.sub(r'\*{1,3}([.,;:!?])', r'\1', text)
+
+        # 4) Quitar dobles asteriscos no balanceados (p. ej., "**Sr. Chinarro")
+        #    Regla: si aparece ** y no hay otro ** de cierre razonablemente cerca, lo eliminamos.
+        #    Simplificación segura: eliminar cualquier ** que no forme parte de nuestros encabezados protegidos.
+        text = re.sub(r'\*\*(?!\S)', '', text)     # "** " al final de token
+        text = re.sub(r'(?<!\S)\*\*', '', text)    # "**" al inicio de línea/frase
+        # Y como medida extra, eliminar cualquier '**' restante que no esté protegido
+        text = text.replace("**", "")
+
+        # 5) Quitar asteriscos simples sueltos que no sean parte de **negrita**
+        text = re.sub(r'(?<!\*)\*(?!\*)', '', text)
+
+        # 6) Restaurar encabezados protegidos
+        restore_map = {
+            "§§BOLD_RIESGOS§§": "**Riesgos:**",
+            "§§BOLD_BENEFICIOS§§": "**Beneficios:**",
+            "§§BOLD_PROF§§": "**Para el profesor:**",
+            "§§BOLD_ALUM§§": "**Para los alumnos:**",
+        }
+        for token, val in restore_map.items():
+            text = text.replace(token, val)
+
+        # 7) Normalizar espacios
+        text = re.sub(r'[ \t]+', ' ', text).strip()
+        return text
 
     
 
@@ -495,11 +752,25 @@ class ResponseFormatter:
 
     def _final_cleanup(self, text: str) -> str:
         """Limpieza final del resultado"""
-        # Normalizar espacios en blanco
+        # Normalizar saltos de línea múltiples a doble salto (párrafos)
         text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
-        text = re.sub(r' +', ' ', text)
-        
-        # Limpiar líneas vacías al inicio y final
+        # Colapsar espacios múltiples
+        text = re.sub(r'[ \t]+', ' ', text)
+
+        # Eliminar líneas que son solo asteriscos o asteriscos con puntuación (artefactos)
+        text = re.sub(r'(?m)^\s*\*{1,3}\s*[.,;:!?]?\s*$', '', text)
+        # Limpieza de asteriscos sueltos dentro de oraciones (sin afectar **negrita** válida)
+        text = self._remove_stray_asterisks(text)
+
+        # Si NO es una lista (no hay viñetas al inicio de línea), convertir saltos simples a espacios
+        if not re.search(r'(?m)^\s*[•\-*]\s+', text):
+            # Reemplazar saltos simples por espacios, preservando párrafos
+            text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text)
+
         text = text.strip()
-        
+
+        # Asegurar que la respuesta termine con puntuación adecuada
+        if text and not re.search(r'[.!?]\s*$', text):
+            text += '.'
+
         return text
