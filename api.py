@@ -172,7 +172,11 @@ async def ask_advanced(request: QueryRequest):
         print(f"[DEBUG] force_bullets: {force_bullets}")
         print(f"[DEBUG] Answer before format: '{response['answer'][:100]}...'")
         
-        response["answer"] = formatter.format(response["answer"], force_bullets=force_bullets)
+        response["answer"] = formatter.format(
+            response["answer"],
+            force_bullets=force_bullets,
+            is_unified_request=not is_narrative
+        )
         
         print(f"[DEBUG] Answer after format: '{response['answer'][:100]}...'")
         print("="*50)
@@ -317,13 +321,19 @@ async def ask_stream(request: QueryRequest):
     """Endpoint para respuestas streaming"""
     async def generate_response():
         start_time = time.time()
+        qid = str(uuid.uuid4())
         
         # Preprocesar query
         clean_query = preprocessor.preprocess(request.query)
         yield f"data: {json.dumps({'type': 'status', 'message': 'Procesando consulta...'})}\n\n"
         
         # Recuperar contexto
-        context = retriever.retrieve(clean_query, top_k=request.top_k)
+        context = retriever.retrieve(
+            clean_query,
+            top_k=request.top_k,
+            filters=request.filters,
+            namespace=request.namespace
+        )
         yield f"data: {json.dumps({'type': 'status', 'message': f'Encontrados {len(context)} fragmentos relevantes'})}\n\n"
         
         # Generar respuesta
@@ -338,29 +348,39 @@ async def ask_stream(request: QueryRequest):
         is_narrative = any(keyword in query_lower for keyword in narrative_keywords)
         force_bullets = is_explicit_list and not is_narrative
         
-        formatted_answer = formatter.format(response["answer"], force_bullets=force_bullets)
+        formatted_answer = formatter.format(
+            response["answer"],
+            force_bullets=force_bullets,
+            is_unified_request=not is_narrative
+        )
         
         # Simular streaming de la respuesta
-        words = formatted_answer.split()
-        for i, word in enumerate(words):
+        # Preservar espacios y saltos de línea durante el streaming
+        import re
+        tokens = re.split(r'(\s+)', formatted_answer)
+        total = max(1, len([t for t in tokens if t is not None]))
+        for i, token in enumerate(tokens):
+            if token is None:
+                continue
             chunk = {
                 'type': 'content',
-                'content': word + ' ',
-                'progress': (i + 1) / len(words)
+                'content': token,
+                'progress': (i + 1) / total
             }
             yield f"data: {json.dumps(chunk)}\n\n"
-            time.sleep(0.05)  # Simular delay
+            time.sleep(0.02)  # Simular delay más fluido y conservar nuevos renglones
         
         # Enviar fuentes y métricas finales
         final_data = {
             'type': 'complete',
             'sources': response.get('sources', []),
             'confidence': calculate_confidence_score(context, response["answer"]),
-            'response_time': round(time.time() - start_time, 3)
+            'response_time': round(time.time() - start_time, 3),
+            'query_id': qid
         }
         yield f"data: {json.dumps(final_data)}\n\n"
     
-    return StreamingResponse(generate_response(), media_type="text/plain")
+    return StreamingResponse(generate_response(), media_type="text/event-stream")
 
 # --- Monitoring y Analytics ---
 @app.get("/metrics")
