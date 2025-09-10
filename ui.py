@@ -32,15 +32,8 @@ if uploaded_file is not None:
     else:
         st.sidebar.error(f"Error al subir el archivo: {resp.text}")
 
-if os.path.exists(documents_folder):
-    docs = [f for f in os.listdir(documents_folder) if f.lower().endswith((".pdf", ".docx", ".txt"))]
-    if docs:
-        for d in docs:
-            st.sidebar.write(f"- {d}")
-    else:
-        st.sidebar.write("⚠️ No hay documentos en la carpeta.")
-else:
-    st.sidebar.write("⚠️ No existe la carpeta 'documents'.")
+# Se omite el listado de archivos en esta sección para evitar duplicar información.
+# Usa el apartado "📚 Gestión de Documentos" para listar, subir o reindexar.
 
 st.sidebar.info("Puedes subir archivos desde aquí")
 
@@ -141,34 +134,116 @@ if query:
     
     # Llamada al backend
     if use_chat_session and st.session_state.session_id:
-        # Usar sesión de chat
+        # Usar sesión de chat (JSON normal)
         resp = requests.post(
             f"http://127.0.0.1:8000/chat/{st.session_state.session_id}/message",
             json=request_data
         )
+
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+            except Exception:
+                st.error("La respuesta del servidor no es JSON válido.")
+                st.text(resp.text)
+                data = None
+
+            if data:
+                st.session_state.messages.append({"role": "user", "content": query})
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": data.get("answer", ""),
+                    "sources": data.get("sources", []),
+                    "confidence": data.get("confidence"),
+                    "query_id": data.get("query_id"),
+                    "response_time": data.get("response_time"),
+                    "session_id": data.get("session_id")
+                })
+        else:
+            st.error(f"Error: {resp.text}")
+
     elif use_streaming:
-        # Usar streaming
-        resp = requests.post("http://127.0.0.1:8000/ask/stream", json=request_data)
+        # Usar streaming (SSE-like). IMPORTANTE: stream=True y parsear líneas "data: {...}"
+        resp = requests.post("http://127.0.0.1:8000/ask/stream", json=request_data, stream=True)
+
+        if resp.status_code != 200:
+            st.error(f"Error: {resp.text}")
+        else:
+            answer_chunks = []
+            final_meta = {}
+
+            try:
+                for raw_line in resp.iter_lines(decode_unicode=True):
+                    if not raw_line:
+                        continue
+                    if isinstance(raw_line, bytes):
+                        try:
+                            raw_line = raw_line.decode("utf-8", errors="ignore")
+                        except Exception:
+                            continue
+
+                    line = raw_line.strip()
+                    if not line.startswith("data:"):
+                        continue
+
+                    payload = line[len("data:"):].strip()
+                    if not payload:
+                        continue
+
+                    try:
+                        evt = json.loads(payload)
+                    except Exception:
+                        # Si alguna línea no es JSON válido, la ignoramos
+                        continue
+
+                    etype = evt.get("type")
+                    if etype == "content":
+                        answer_chunks.append(evt.get("content", ""))
+                    elif etype == "complete":
+                        final_meta = evt
+
+            except Exception as e:
+                st.warning(f"Error parseando stream: {e}")
+
+            answer = "".join(answer_chunks).strip()
+
+            # Guardamos en historial
+            st.session_state.messages.append({"role": "user", "content": query})
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": answer or "(respuesta vacía)",
+                "sources": final_meta.get("sources", []),
+                "confidence": final_meta.get("confidence"),
+                "query_id": final_meta.get("query_id"),
+                "response_time": final_meta.get("response_time"),
+                "session_id": st.session_state.session_id if use_chat_session else None
+            })
+
     else:
-        # Usar endpoint normal
+        # Usar endpoint normal (JSON)
         resp = requests.post("http://127.0.0.1:8000/ask", json=request_data)
-    
-    if resp.status_code == 200:
-        data = resp.json()
-        
-        # Guardamos en historial
-        st.session_state.messages.append({"role": "user", "content": query})
-        st.session_state.messages.append({
-            "role": "assistant",
-            "content": data["answer"],
-            "sources": data.get("sources", []),
-            "confidence": data.get("confidence"),
-            "query_id": data.get("query_id"),
-            "response_time": data.get("response_time"),
-            "session_id": data.get("session_id")
-        })
-    else:
-        st.error(f"Error: {resp.text}")
+
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+            except Exception:
+                st.error("La respuesta del servidor no es JSON válido.")
+                st.text(resp.text)
+                data = None
+
+            if data:
+                st.session_state.messages.append({"role": "user", "content": query})
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": data.get("answer", ""),
+                    "sources": data.get("sources", []),
+                    "confidence": data.get("confidence"),
+                    "query_id": data.get("query_id"),
+                    "response_time": data.get("response_time"),
+                    "session_id": data.get("session_id")
+                })
+        else:
+            st.error(f"Error: {resp.text}")
 
 # --- Renderizar historial ---
 for msg in st.session_state.messages:
