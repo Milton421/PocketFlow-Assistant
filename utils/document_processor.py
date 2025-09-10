@@ -293,6 +293,12 @@ class DocumentProcessor:
         
         # Corregir espacios después de puntuación
         text = re.sub(r'([.,;:!?])\s*', r'\1 ', text)
+
+        # Eliminar asteriscos sueltos/artefactos del PDF (evita "**" visibles en respuestas)
+        # 1) Si van pegados a signos: "palabra**:" -> "palabra:"
+        text = re.sub(r'\*{1,3}([.,;:!?])', r'\1', text)
+        # 2) Eliminar cualquier resto de asteriscos (no usamos markdown en los chunks indexados)
+        text = re.sub(r'\*+', '', text)
         
         # Limpiar líneas que solo contienen caracteres especiales o números
         lines = text.split('\n')
