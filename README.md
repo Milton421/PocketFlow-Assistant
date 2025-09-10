@@ -112,7 +112,7 @@ Iniciar el sistema
 
 ```bash
 # Backend
-uvicorn api:app --reload
+python api.py
 # Interfaz
 streamlit run ui.py
 ```
@@ -147,6 +147,7 @@ flowchart LR
     C --> F
 ```
  
+
 
 
 
