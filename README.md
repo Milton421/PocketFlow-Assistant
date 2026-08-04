@@ -25,7 +25,6 @@
 3. [Requisitos del Sistema](#requisitos-del-sistema)
 4. [Instalación y Configuración](#instalación-y-configuración)
 5. [Diseño Técnico y Personalización](#diseño-técnico-y-personalización)
-6. [Licencia](#licencia)
 
 ---
 
