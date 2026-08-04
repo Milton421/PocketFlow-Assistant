@@ -1,11 +1,11 @@
-# 🤖 PocketFlow Assistant  
+#  PocketFlow Assistant  
 
 PocketFlow Assistant es un sistema avanzado de **recuperación y generación de respuestas (RAG)** que te permite interactuar con documentos de manera inteligente.  
 Combina **búsqueda semántica** con **modelos de lenguaje** para ofrecer respuestas precisas basadas en tu información.  
 
 ---
 
-## 📌 Tabla de Contenidos  
+## Tabla de Contenidos  
 1. [Introducción](#-introducción)  
 2. [Arquitectura del Sistema](#-arquitectura-del-sistema)  
 3. [Requisitos del Sistema](#-requisitos-del-sistema)  
@@ -14,7 +14,7 @@ Combina **búsqueda semántica** con **modelos de lenguaje** para ofrecer respue
 
 ---
 
-## 🌟 Introducción  
+##  Introducción  
 Con PocketFlow Assistant podrás:  
 - Consultar documentos en PDF, DOCX y TXT.  
 - Obtener respuestas basadas en contenido real.  
@@ -23,7 +23,7 @@ Con PocketFlow Assistant podrás:
 
 ---
 
-## 🏗️ Arquitectura del Sistema  
+## Arquitectura del Sistema  
 
 ### 🔹 Procesamiento de Documentos (Offline)  
 - Carga de documentos en múltiples formatos.  
@@ -37,7 +37,7 @@ Con PocketFlow Assistant podrás:
 3. Construcción de contexto.  
 4. Generación de respuesta con LLM.  
 
-## 📊 **Diagrama del flujo del sistema:**  
+##  **Diagrama del flujo del sistema:**  
 
 ```mermaid
 flowchart TD
@@ -69,7 +69,7 @@ flowchart TD
 
 
 
-## 💻 Requisitos del Sistema
+##  Requisitos del Sistema
 -Python 3.10 o superior
 
 -Windows, macOS o Linux
@@ -78,7 +78,7 @@ flowchart TD
 
 -Conexión a internet para descargar modelos y usar API
 
-## 🛠️ Instalación y Configuración
+##  Instalación y Configuración
 
 Clona el repositorio:
 
@@ -120,11 +120,11 @@ streamlit run ui.py
 
 ## ⚙️ 10. Diseño Técnico
 
-### 🔄 Flujo de Datos
+###  Flujo de Datos
 1. **Procesamiento de Documentos** → Generación de **Embeddings** → Almacenamiento en **FAISS**  
 2. **Consulta del Usuario** → Conversión a **Embedding** → **Recuperación** de fragmentos → Generación de **Respuesta**
 
-### 🎛️ Personalización
+###  Personalización
 - Modelo de *embeddings* configurable  
 - Tamaño de fragmentos (*chunk size*) ajustable  
 - Umbral de relevancia modificable  
